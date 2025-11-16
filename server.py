@@ -1,87 +1,49 @@
-import json
 from aiohttp import web
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
-from models import Session, Ad, close_orm, init_orm
-from typing import Union
+import aiohttp
+import asyncio
+from models import Base, Item
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.orm import sessionmaker
+import json
 
+DATABASE_URL = "postgresql+asyncpg://user:password@localhost/db"
 
-def get_http_error(err_cls, message: Union[str, dict, list]):
-    error_message = json.dumps({"error": message})
-    return err_cls(text=error_message, content_type="application/json")
+async def init_db():
+    engine = create_async_engine(DATABASE_URL, echo=True)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    return engine
 
+async def get_items(request):
+    engine = request.app['db_engine']
+    async with AsyncSession(engine) as session:
+        items = await session.execute(Item.__table__.select())
+        result = [dict(row) for row in items]
+        return web.json_response(result)
 
-app = web.Application()
-
-
-async def orm_context(app: web.Application):
-    print("start")
-    await init_orm()
-    yield
-    print("finish")
-    await close_orm()
-
-
-@web.middleware
-async def session_middleware(request: web.Request, handler):
-    async with Session() as session:
-        request.session = session
-        response = await handler(request)
-        return response
-
-
-app.middlewares.append(session_middleware)
-app.cleanup_ctx.append(orm_context)
-
-
-async def get_Ad_by_id(ad_id, session: AsyncSession) -> Ad:
-    ad = await session.get(Ad, ad_id)
-    if ad is None:
-        raise get_http_error(web.HTTPNotFound, "user not found")
-    return ad
-
-
-async def delete_Ad_by_id(ad: Ad, session: AsyncSession):
-    await session.delete(ad)
-    await session.commit()
-
-
-async def add_Ad(ad: Ad, session: AsyncSession):
-    session.add(ad)
-    try:
+async def create_item(request):
+    engine = request.app['db_engine']
+    data = await request.json()
+    
+    async with AsyncSession(engine) as session:
+        new_item = Item(**data)
+        session.add(new_item)
         await session.commit()
-    except IntegrityError as err:
-        raise get_http_error(web.HTTPConflict, "user already exists")
+        
+        return web.json_response({'id': new_item.id, 'status': 'created'})
 
+async def health_check(request):
+    return web.json_response({'status': 'healthy', 'service': 'aiohttp_server'})
 
-class AdView(web.View):
+async def app_factory():
+    app = web.Application()
+    app.router.add_get('/items', get_items)
+    app.router.add_post('/items', create_item)
+    app.router.add_get('/health', health_check)
+    
+    app['db_engine'] = await init_db()
+    
+    return app
 
-    @property
-    def ad_id(self):
-        return int(self.request.match_info["ad_id"])
-
-    async def get(self):
-        ad = await get_Ad_by_id(self.ad_id, self.request.session)
-        return web.json_response(ad.dict)
-
-    async def post(self):
-        json_data = await self.request.json()
-        ad = Ad(**json_data)
-        await add_Ad(ad, self.request.session)
-        return web.json_response(ad.id_dict)
-
-    async def delete(self):
-        ad = await get_Ad_by_id(self.ad_id, self.request.session)
-        await delete_Ad_by_id(ad, self.request.session)
-        return web.json_response({"status": "deleted"})
-
-
-app.add_routes(
-    [
-        web.post("/api", AdView),
-        web.get("/api/{ad_id:[0-9]+}", AdView),
-        web.delete("/api/{ad_id:[0-9]+}", AdView),
-    ]
-)
-
-web.run_app(app)
+if __name__ == '__main__':
+    web.run_app(app_factory(), host='0.0.0.0', port=8080)
