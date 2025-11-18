@@ -1,6 +1,6 @@
-from views import AdvertisementList, AdvertisementDetail
+from views import AdsView
 
 
 def setup_routes(app):
-    app.router.add_view('/ads', AdvertisementList)
-    app.router.add_view('/ads/{id}', AdvertisementDetail)
+    app.router.add_route('*', '/ads/{ad_id:\d+}', AdsView)
+    app.router.add_route('*', '/ads/', AdsView)
