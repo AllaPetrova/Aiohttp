@@ -1,92 +1,68 @@
 from aiohttp import web
-from aiohttp_jinja2 import template
-from models import Advertisement
-from sqlalchemy import desc
+from models import Ads
 import json
 
 
-class AdvertisementList(web.View):
-    @template('ads_list.html')
+class AdsView(web.View):
+
     async def get(self):
-        db = self.request.app['db']
-        ads = db.query(Advertisement).order_by(desc(Advertisement.created_at)).all()
-        return {'ads': ads}
+        ad_id = self.request.match_info.get('ad_id')
+        
+        if ad_id:
+            ad_id = int(ad_id)
+            ad = await self.get_ad(ad_id)
+            if not ad:
+                return web.json_response({'error': 'Ad not found'}, status=404)
+            return web.json_response(ad)
+        else:
+            ads = await self.get_all_ads()
+            return web.json_response({'ads': ads})
 
     async def post(self):
-        data = await self.request.post()
-        db = self.request.app['db']
+        try:
+            data = await self.request.json()
+        except json.JSONDecodeError:
+            return web.json_response({'error': 'Invalid JSON'}, status=400)
         
-        ad = Advertisement(
-            title=data.get('title'),
-            description=data.get('description'),
-            owner=data.get('owner')
-        )
+        try:
+            ad_data = Ads(**data)
+        except Exception as e:
+            return web.json_response({'error': str(e)}, status=400)
         
-        db.add(ad)
-        db.commit()
-        
-        return web.json_response({
-            'id': ad.id,
-            'title': ad.title,
-            'description': ad.description,
-            'owner': ad.owner,
-            'created_at': ad.created_at.isoformat()
-        }, status=201)
-
-
-class AdvertisementDetail(web.View):
-    async def get(self):
-        ad_id = int(self.request.match_info['id'])
-        db = self.request.app['db']
-        
-        ad = db.query(Advertisement).filter(Advertisement.id == ad_id).first()
-        if not ad:
-            return web.json_response({'error': 'Advertisement not found'}, status=404)
-            
-        return web.json_response({
-            'id': ad.id,
-            'title': ad.title,
-            'description': ad.description,
-            'owner': ad.owner,
-            'created_at': ad.created_at.isoformat()
-        })
-
-    async def patch(self):
-        ad_id = int(self.request.match_info['id'])
-        db = self.request.app['db']
-        
-        ad = db.query(Advertisement).filter(Advertisement.id == ad_id).first()
-        if not ad:
-            return web.json_response({'error': 'Advertisement not found'}, status=404)
-        
-        data = await self.request.json()
-        
-        if 'title' in data:
-            ad.title = data['title']
-        if 'description' in data:
-            ad.description = data['description']
-        if 'owner' in data:
-            ad.owner = data['owner']
-            
-        db.commit()
-        
-        return web.json_response({
-            'id': ad.id,
-            'title': ad.title,
-            'description': ad.description,
-            'owner': ad.owner,
-            'created_at': ad.created_at.isoformat()
-        })
+        ad_id = await self.create_ad(ad_data.dict())
+        return web.json_response({'id': ad_id, **ad_data.dict()}, status=201)
 
     async def delete(self):
-        ad_id = int(self.request.match_info['id'])
-        db = self.request.app['db']
+        ad_id = self.request.match_info.get('ad_id')
+        if not ad_id:
+            return web.json_response({'error': 'Ad ID required'}, status=400)
         
-        ad = db.query(Advertisement).filter(Advertisement.id == ad_id).first()
-        if not ad:
-            return web.json_response({'error': 'Advertisement not found'}, status=404)
-            
-        db.delete(ad)
-        db.commit()
+        ad_id = int(ad_id)
+        success = await self.delete_ad(ad_id)
         
-        return web.json_response({}, status=204)
+        if not success:
+            return web.json_response({'error': 'Ad not found'}, status=404)
+        
+        return web.json_response({'message': f'Ad {ad_id} deleted'})
+
+    async def get_ad(self, ad_id: int):
+        ads_storage = self.request.app['ads_storage']
+        return ads_storage.get(ad_id)
+
+    async def get_all_ads(self):
+        ads_storage = self.request.app['ads_storage']
+        return list(ads_storage.values())
+
+    async def create_ad(self, ad_data: dict):
+        ads_storage = self.request.app['ads_storage']
+        ad_id = max(ads_storage.keys(), default=0) + 1
+        ad_data['id'] = ad_id
+        ads_storage[ad_id] = ad_data
+        return ad_id
+
+    async def delete_ad(self, ad_id: int):
+        ads_storage = self.request.app['ads_storage']
+        if ad_id in ads_storage:
+            del ads_storage[ad_id]
+            return True
+        return False
