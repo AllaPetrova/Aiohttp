@@ -1,30 +1,28 @@
-from sqlalchemy import create_engine, Column, Integer, String, DateTime
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-from datetime import datetime
-import aiopg.sa
-
-Base = declarative_base()
+from pydantic import BaseModel, Field, validator
+from typing import Optional
+import re
 
 
-class Advertisement(Base):
-    __tablename__ = 'advertisements'
-    
-    id = Column(Integer, primary_key=True)
-    title = Column(String(100), nullable=False)
-    description = Column(String(1000))
-    created_at = Column(DateTime, default=datetime.utcnow)
-    owner = Column(String(100), nullable=False)
+class Ads(BaseModel):
+    id: Optional[int] = None
+    title: str = Field(..., min_length=1, max_length=100)
+    description: str = Field(..., min_length=1, max_length=500)
+    owner: str = Field(..., min_length=1, max_length=50)
 
+    @validator('title')
+    def validate_title(cls, v):
+        if not v.strip():
+            raise ValueError('Title cannot be empty')
+        return v.strip()
 
-engine = create_engine('sqlite:///ads.db')
-Base.metadata.create_all(engine)
-Session = sessionmaker(bind=engine)
+    @validator('description')
+    def validate_description(cls, v):
+        if not v.strip():
+            raise ValueError('Description cannot be empty')
+        return v.strip()
 
-
-async def init_db(app):
-    app['db'] = Session()
-
-
-async def close_db(app):
-    app['db'].close()
+    @validator('owner')
+    def validate_owner(cls, v):
+        if not re.match(r'^[a-zA-Z0-9_]+$', v):
+            raise ValueError('Owner can only contain letters, numbers and underscores')
+        return v
